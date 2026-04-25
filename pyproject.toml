@@ -1,0 +1,9 @@
+[project]
+name = "amalitech-airflow-pipeline"
+version = "0.1.0"
+description = "Airflow runtime dependencies for the flight price ELT pipeline."
+requires-python = ">=3.12,<3.14"
+dependencies = []
+
+[tool.setuptools]
+py-modules = []

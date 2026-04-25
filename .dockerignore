@@ -1,0 +1,16 @@
+.env
+.git
+.idea
+.venv
+venv
+logs
+config
+plugins
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+Flight_Price_Dataset_of_Bangladesh.csv

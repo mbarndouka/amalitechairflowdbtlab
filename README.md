@@ -12,8 +12,10 @@ This project is an ELT pipeline for the Bangladesh flight price dataset. The int
 ```text
 .
 ├── Flight_Price_Dataset_of_Bangladesh.csv  # Raw flight price dataset
+├── Dockerfile                              # Custom Airflow image
 ├── dags/                                   # Airflow DAGs
 ├── docker-compose.yaml                     # Airflow, MySQL, PostgreSQL, and Redis services
+├── pyproject.toml                          # Python packages baked into Airflow
 ├── .env.example                            # Environment variable template
 └── README.md
 ```
@@ -31,6 +33,8 @@ The Docker Compose setup includes:
 - `airflow-dag-processor`: parses DAG files
 - `airflow-triggerer`: handles deferred Airflow tasks
 - `flower`: optional Celery monitoring service
+
+MySQL is pinned to `mysql:9.6.0`, the current Docker Official Image `latest` tag at the time of this update. The MySQL and PostgreSQL services include healthchecks, and Airflow waits for MySQL, PostgreSQL, and Redis to become healthy before starting.
 
 ## Prerequisites
 
@@ -73,6 +77,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 Initialize and start the services:
 
 ```bash
+docker compose build
 docker compose up airflow-init
 docker compose up -d
 ```
@@ -156,6 +161,13 @@ dbt/
 └── profiles.yml
 ```
 
+If Airflow tasks need dbt or any other Python package, add it to `pyproject.toml` and rebuild the custom Airflow image:
+
+```bash
+docker compose build
+docker compose up -d
+```
+
 ### 3. Load Cleaned Data to PostgreSQL
 
 The cleaned dbt models should be materialized into PostgreSQL. The PostgreSQL service is exposed on:
@@ -192,6 +204,7 @@ The current DAG in `dags/welcome.py` is a starter DAG. Replace or extend it with
 Start all services:
 
 ```bash
+docker compose build
 docker compose up -d
 ```
 
