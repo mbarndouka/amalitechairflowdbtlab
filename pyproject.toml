@@ -5,6 +5,9 @@ description = "Airflow runtime dependencies for the flight price ELT pipeline."
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "apache-airflow-providers-mysql==6.5.2",
+    "apache-airflow-providers-postgres==6.4.0",
+    "ipykernel",
+    "pandas",
 ]
 
 [tool.setuptools]
