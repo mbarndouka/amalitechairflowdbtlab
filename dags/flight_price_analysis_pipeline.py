@@ -4,22 +4,27 @@ import csv
 from datetime import datetime
 from pathlib import Path
 
-from airflow.sdk import task, dag
 from airflow.providers.mysql.hooks.mysql import MySqlHook
-from yaml import reader
+from airflow.providers.postgres.hooks.postgres import PostgresHook
+from airflow.sdk import dag, task
 
 CSV_PATH = "/opt/airflow/dags/data/Flight_Price_Dataset_of_Bangladesh.csv"
 MYSQL_CONN_ID = "mysql_raw"
+POSTGRES_CONN_ID = "postgres_target"
 
 MYSQL_DB = "airflow"
 MYSQL_RAW_TABLE = "raw_flight_prices"
+POSTGRES_SCHEMA = "public"
+POSTGRES_TARGET_TABLE = "raw_flight_prices"
+LOAD_BATCH_SIZE = 5_000
+
 
 @dag(
     dag_id="flight_price_analysis_pipeline",
     start_date=datetime(2026, 4, 26),
     schedule=None,
     catchup=False,
-    tags=["flight-price", "mysql",]
+    tags=["flight-price", "mysql"]
 )
 def flight_price_analysis_pipeline():
     @task
@@ -125,14 +130,104 @@ def flight_price_analysis_pipeline():
         actual_count = result[0] if result else 0
 
         if actual_count != expected_count:
-            raise ValueError(f"Data load validation failed. Expected {expected_count} rows, but found {actual_count} rows in MySQL.")
+            raise ValueError(
+                f"Data load validation failed. Expected {expected_count} rows, "
+                f"but found {actual_count} rows in MySQL."
+            )
 
+    @task
+    def load_data_to_postgres_from_mysql() -> None:
+        mysql_hook = MySqlHook(mysql_conn_id=MYSQL_CONN_ID)
+        postgres_hook = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
+
+        postgres_hook.run(
+            f"""
+            CREATE TABLE IF NOT EXISTS {POSTGRES_SCHEMA}.{POSTGRES_TARGET_TABLE} (
+                airline VARCHAR(255),
+                source VARCHAR(10),
+                source_name VARCHAR(255),
+                destination VARCHAR(10),
+                destination_name VARCHAR(255),
+                departure_date_time TIMESTAMP,
+                arrival_date_time TIMESTAMP,
+                duration_hrs NUMERIC(12,6),
+                stopovers VARCHAR(50),
+                aircraft_type VARCHAR(100),
+                class VARCHAR(100),
+                booking_source VARCHAR(100),
+                base_fare_bdt NUMERIC(14,6),
+                tax_surcharge_bdt NUMERIC(14,6),
+                total_fare_bdt NUMERIC(14,6),
+                seasonality VARCHAR(100),
+                days_before_departure INTEGER
+            );
+            TRUNCATE TABLE {POSTGRES_SCHEMA}.{POSTGRES_TARGET_TABLE};
+            """
+        )
+
+        source_sql = f"""
+            SELECT
+                `Airline`,
+                `Source`,
+                `Source Name`,
+                `Destination`,
+                `Destination Name`,
+                `Departure Date & Time`,
+                `Arrival Date & Time`,
+                `Duration (hrs)`,
+                `Stopovers`,
+                `Aircraft Type`,
+                `Class`,
+                `Booking Source`,
+                `Base Fare (BDT)`,
+                `Tax & Surcharge (BDT)`,
+                `Total Fare (BDT)`,
+                `Seasonality`,
+                `Days Before Departure`
+            FROM {MYSQL_DB}.{MYSQL_RAW_TABLE};
+        """
+
+        target_fields = [
+            "airline",
+            "source",
+            "source_name",
+            "destination",
+            "destination_name",
+            "departure_date_time",
+            "arrival_date_time",
+            "duration_hrs",
+            "stopovers",
+            "aircraft_type",
+            "class",
+            "booking_source",
+            "base_fare_bdt",
+            "tax_surcharge_bdt",
+            "total_fare_bdt",
+            "seasonality",
+            "days_before_departure",
+        ]
+
+        mysql_conn = mysql_hook.get_conn()
+        cursor = mysql_conn.cursor()
+        try:
+            cursor.execute(source_sql)
+            while rows := cursor.fetchmany(LOAD_BATCH_SIZE):
+                postgres_hook.insert_rows(
+                    table=f"{POSTGRES_SCHEMA}.{POSTGRES_TARGET_TABLE}",
+                    rows=rows,
+                    target_fields=target_fields,
+                    commit_every=LOAD_BATCH_SIZE,
+                )
+        finally:
+            cursor.close()
+            mysql_conn.close()
 
     csv_count = validate_csv_file()
     create_raw = create_mysql_raw_table()
     load_raw = load_csv_to_mysql()
     validate_raw = validate_mysql_load(csv_count)
+    load_postgres = load_data_to_postgres_from_mysql()
 
-    csv_count >> create_raw >> load_raw >> validate_raw
+    csv_count >> create_raw >> load_raw >> validate_raw >> load_postgres
 
 flight_price_analysis_pipeline()
