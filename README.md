@@ -1,63 +1,188 @@
-# Flight Price ELT Pipeline
+# Flight Price Analysis Pipeline
 
-This project is an ELT pipeline for the Bangladesh flight price dataset. The intended flow is:
+This project is a data pipeline for the Bangladesh flight price dataset.
 
-1. Load the raw CSV data into MySQL.
-2. Clean and transform the raw data with dbt.
-3. Load the cleaned models into PostgreSQL.
-4. Orchestrate the workflow with Apache Airflow.
+The pipeline does these steps:
+
+1. Reads a CSV file with flight price data.
+2. Loads the raw data into MySQL.
+3. Copies the raw data from MySQL to PostgreSQL.
+4. Uses dbt to clean, test, and transform the data in PostgreSQL.
+5. Publishes final reporting tables in PostgreSQL.
+
+Apache Airflow controls the full process.
+
+## Why MySQL and PostgreSQL Are Both Used
+
+MySQL is used as the raw landing database. This means the original CSV data is stored there first.
+
+PostgreSQL is used as the data warehouse. dbt transformations are done in PostgreSQL because this project does not use a direct dbt transformation setup for MySQL.
+
+So the flow is:
+
+```text
+CSV file -> MySQL raw table -> PostgreSQL warehouse -> dbt models -> reporting tables
+```
 
 ## Project Structure
 
 ```text
 .
-├── Flight_Price_Dataset_of_Bangladesh.csv  # Raw flight price dataset
-├── Dockerfile                              # Custom Airflow image
-├── dags/                                   # Airflow DAGs
-├── docker-compose.yaml                     # Airflow, MySQL, PostgreSQL, and Redis services
-├── pyproject.toml                          # Python packages baked into Airflow
-├── .env.example                            # Environment variable template
+├── dags/
+│   ├── flight_price_analysis_pipeline.py   # Main Airflow pipeline
+│   ├── welcome.py                          # Simple sample DAG
+│   └── data/
+│       └── Flight_Price_Dataset_of_Bangladesh.csv
+├── dbt/
+│   ├── models/                             # dbt staging, quality, and KPI models
+│   ├── seeds/                              # Airport reference data
+│   ├── dbt_project.yml
+│   └── profiles.yml
+├── docs/
+│   ├── pipeline_report.md                  # Full project report
+│   └── assets/
+│       └── pipeline_architecture.png       # Pipeline architecture image
+├── Dockerfile
+├── docker-compose.yaml
+├── pyproject.toml
 └── README.md
 ```
 
-## Services
+## Main Tools
 
-The Docker Compose setup includes:
+- Apache Airflow: runs the pipeline tasks.
+- MySQL: stores the raw CSV data.
+- PostgreSQL: stores warehouse, analytics, and reporting tables.
+- dbt: cleans, transforms, and tests the data.
+- Docker Compose: starts all services together.
+- Redis: supports Airflow Celery workers.
 
-- `mysql`: raw landing database for the CSV data
-- `postgres`: target database for Airflow metadata and cleaned output tables
-- `redis`: Celery broker for Airflow
-- `airflow-apiserver`: Airflow web API and UI service
-- `airflow-scheduler`: schedules DAG runs
-- `airflow-worker`: executes Airflow tasks
-- `airflow-dag-processor`: parses DAG files
-- `airflow-triggerer`: handles deferred Airflow tasks
-- `flower`: optional Celery monitoring service
+## Pipeline Architecture
 
-MySQL is pinned to `mysql:9.6.0`, the current Docker Official Image `latest` tag at the time of this update. The MySQL and PostgreSQL services include healthchecks, and Airflow waits for MySQL, PostgreSQL, and Redis to become healthy before starting.
+The architecture image is available here:
 
-## Prerequisites
+![Flight price pipeline architecture](docs/assets/pipeline_architecture.png)
+
+More details are in [docs/pipeline_report.md](docs/pipeline_report.md).
+
+## Main Airflow DAG
+
+The main DAG is:
+
+```text
+flight_price_analysis_pipeline
+```
+
+It is located at:
+
+```text
+dags/flight_price_analysis_pipeline.py
+```
+
+The DAG is manually triggered. It does not run on a schedule.
+
+## Airflow Task Flow
+
+The main DAG runs these tasks:
+
+1. `validate_csv_file`
+   - Checks that the CSV file exists.
+   - Checks that the CSV file has the expected columns.
+   - Counts the number of rows.
+
+2. `create_mysql_raw_table`
+   - Creates the MySQL raw table.
+   - The table name is `raw_flight_prices`.
+
+3. `load_csv_to_mysql`
+   - Loads the CSV file into MySQL.
+
+4. `validate_mysql_load`
+   - Checks that the number of rows in MySQL matches the CSV row count.
+
+5. `load_data_to_postgres_from_mysql`
+   - Reads data from MySQL.
+   - Loads it into PostgreSQL table `public.raw_flight_prices`.
+   - Uses simple snake_case column names in PostgreSQL.
+
+6. `run_dbt_seed`
+   - Runs `dbt seed`.
+   - Loads airport reference data from `dbt/seeds/bd_airport.csv`.
+
+7. `run_dbt_models`
+   - Runs `dbt run`.
+   - Builds staging, quality, clean fact, and KPI tables.
+
+8. `run_dbt_test`
+   - Runs `dbt test`.
+   - Checks important fields for missing values.
+
+9. `publish_transformed_data_to_postgres`
+   - Copies final dbt tables from the `analytics` schema to the `reporting` schema.
+   - Stops publishing if the clean flight price table is empty.
+
+## dbt Models
+
+The dbt project is inside the `dbt/` folder.
+
+Important models:
+
+- `stg_flight_prices`
+  - Cleans raw data.
+  - Trims text fields.
+  - Converts airport codes to uppercase.
+  - Calculates total fare from base fare and tax.
+  - Creates the peak season flag.
+
+- `bd_flight_fare_row_audit`
+  - Finds bad rows.
+  - Checks missing values, negative fares, invalid airport codes, and wrong total fare values.
+
+- `flight_prices`
+  - Final clean flight price table.
+  - Removes rows found in the audit table.
+
+- `average_fare_by_airline`
+  - Shows average fare by airline.
+
+- `booking_count_by_airline`
+  - Shows number of records by airline.
+
+- `seasonal_fare_variation`
+  - Compares peak and non-peak season fares.
+
+- `most_popular_routes`
+  - Shows the most common routes.
+
+## Final Reporting Tables
+
+The final tables are published to the PostgreSQL `reporting` schema:
+
+- `reporting.flight_prices`
+- `reporting.average_fare_by_airline`
+- `reporting.booking_count_by_airline`
+- `reporting.seasonal_fare_variation`
+- `reporting.most_popular_routes`
+- `reporting.bd_flight_fare_row_audit`
+
+## Requirements
+
+You need:
 
 - Docker
 - Docker Compose
-- Python, if you want to run dbt locally outside Docker
-- dbt with MySQL and PostgreSQL adapters, if running transformations locally
 
-Example local dbt installation:
-
-```bash
-pip install dbt-core dbt-mysql dbt-postgres
-```
+You do not need to install Airflow, MySQL, PostgreSQL, or dbt manually if you run the project with Docker Compose.
 
 ## Environment Setup
 
-Create a local `.env` file from the example:
+Create a `.env` file from the example file:
 
 ```bash
 cp .env.example .env
 ```
 
-Update the placeholder passwords and secrets in `.env`, especially:
+Then update the values in `.env`, especially:
 
 - `POSTGRES_PASSWORD`
 - `MYSQL_ROOT_PASSWORD`
@@ -72,139 +197,49 @@ You can generate a Fernet key with:
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-## Start the Stack
+## Start the Project
 
-Initialize and start the services:
+Build the Airflow image:
 
 ```bash
 docker compose build
+```
+
+Initialize Airflow:
+
+```bash
 docker compose up airflow-init
+```
+
+Start all services:
+
+```bash
 docker compose up -d
 ```
 
-Airflow will be available at:
+Open Airflow in the browser:
 
 ```text
 http://localhost:8080
 ```
 
-The default username comes from `_AIRFLOW_WWW_USER_USERNAME` in `.env`.
+The Airflow username and password come from the `.env` file.
 
-## Data Pipeline
+## Run the Pipeline
 
-### 1. Load Raw Data to MySQL
+1. Open Airflow at `http://localhost:8080`.
+2. Find the DAG named `flight_price_analysis_pipeline`.
+3. Unpause the DAG if it is paused.
+4. Trigger the DAG manually.
+5. Wait for all tasks to finish successfully.
 
-The raw source file is:
-
-```text
-Flight_Price_Dataset_of_Bangladesh.csv
-```
-
-Recommended raw table name:
-
-```text
-raw_flight_prices
-```
-
-The dataset includes columns such as:
-
-- `Airline`
-- `Source`
-- `Source Name`
-- `Destination`
-- `Destination Name`
-- `Departure Date & Time`
-- `Arrival Date & Time`
-- `Duration (hrs)`
-- `Stopovers`
-- `Aircraft Type`
-- `Class`
-- `Booking Source`
-- `Base Fare (BDT)`
-- `Tax & Surcharge (BDT)`
-- `Total Fare (BDT)`
-- `Seasonality`
-- `Days Before Departure`
-
-The MySQL service is exposed on:
-
-```text
-localhost:3306
-```
-
-Connection values are configured in `.env`:
-
-- database: `MYSQL_DATABASE`
-- user: `MYSQL_USER`
-- password: `MYSQL_PASSWORD`
-
-### 2. Clean Data with dbt
-
-dbt should read from the MySQL raw table and build cleaned models. Typical cleaning steps include:
-
-- Rename columns to snake_case.
-- Cast date and time fields to timestamps.
-- Cast fare and duration fields to numeric types.
-- Standardize text values such as airline, class, stopovers, and booking source.
-- Validate required fields.
-- Remove duplicate records where appropriate.
-
-Suggested model layers:
-
-```text
-dbt/
-├── models/
-│   ├── staging/
-│   │   └── stg_flight_prices.sql
-│   └── marts/
-│       └── flight_prices_cleaned.sql
-└── profiles.yml
-```
-
-If Airflow tasks need dbt or any other Python package, add it to `pyproject.toml` and rebuild the custom Airflow image:
-
-```bash
-docker compose build
-docker compose up -d
-```
-
-### 3. Load Cleaned Data to PostgreSQL
-
-The cleaned dbt models should be materialized into PostgreSQL. The PostgreSQL service is exposed on:
-
-```text
-localhost:5432
-```
-
-Connection values are configured in `.env`:
-
-- database: `POSTGRES_DB`
-- user: `POSTGRES_USER`
-- password: `POSTGRES_PASSWORD`
-
-Recommended target table name:
-
-```text
-flight_prices_cleaned
-```
-
-### 4. Orchestrate with Airflow
-
-Airflow should orchestrate the full workflow:
-
-1. Check that MySQL and PostgreSQL are available.
-2. Load the CSV file into MySQL.
-3. Run dbt transformations.
-4. Validate the cleaned PostgreSQL tables.
-
-The current DAG in `dags/welcome.py` is a starter DAG. Replace or extend it with a DAG for the flight price pipeline.
+After the DAG finishes, check the final tables in PostgreSQL under the `reporting` schema.
 
 ## Useful Commands
 
 Start all services:
 
 ```bash
-docker compose build
 docker compose up -d
 ```
 
@@ -220,7 +255,7 @@ View running containers:
 docker compose ps
 ```
 
-View Airflow logs:
+View Airflow scheduler logs:
 
 ```bash
 docker compose logs -f airflow-scheduler
@@ -238,9 +273,15 @@ Open a PostgreSQL shell:
 docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 ```
 
-## Next Steps
+## Documentation
 
-- Add a CSV-to-MySQL load script or Airflow task.
-- Add a dbt project for staging and cleaned models.
-- Add Airflow tasks to run the raw load and dbt commands.
-- Add dbt tests for required fields, accepted values, and uniqueness checks.
+A full report is available here:
+
+[docs/pipeline_report.md](docs/pipeline_report.md)
+
+It explains:
+
+- Pipeline architecture and execution flow.
+- Airflow DAG and task descriptions.
+- KPI definitions and computation logic.
+- The MySQL and dbt challenge, and how PostgreSQL solved it.
