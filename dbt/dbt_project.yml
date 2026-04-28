@@ -1,0 +1,12 @@
+name: flight_price_analysis
+version: '1.0'
+config-version: 2
+
+profile: flight_price_analysis
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+
+models:
+  flight_price_analysis:
+    +materialized: table

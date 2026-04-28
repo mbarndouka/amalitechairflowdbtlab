@@ -1,0 +1,21 @@
+version: 2
+
+sources:
+    - name: raw
+      database: analysis
+      schema: public
+      tables:
+        - name: raw_flight_prices
+          columns:
+            - name: airline
+              tests: [ not_null ]
+            - name: source
+              tests: [ not_null ]
+            - name: destination
+              tests: [ not_null ]
+            - name: base_fare_bdt
+              tests: [ not_null ]
+            - name: tax_surcharge_bdt
+              tests: [ not_null ]
+            - name: total_fare_bdt
+              tests: [ not_null ]

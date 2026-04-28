@@ -8,6 +8,8 @@ from airflow.providers.mysql.hooks.mysql import MySqlHook
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import dag, task
 
+import subprocess
+
 CSV_PATH = "/opt/airflow/dags/data/Flight_Price_Dataset_of_Bangladesh.csv"
 MYSQL_CONN_ID = "mysql_raw"
 POSTGRES_CONN_ID = "postgres_target"
@@ -16,7 +18,18 @@ MYSQL_DB = "airflow"
 MYSQL_RAW_TABLE = "raw_flight_prices"
 POSTGRES_SCHEMA = "public"
 POSTGRES_TARGET_TABLE = "raw_flight_prices"
+ANALYTICS_SCHEMA = "analytics"
+REPORTING_SCHEMA = "reporting"
 LOAD_BATCH_SIZE = 5_000
+
+PUBLISHED_TABLES = (
+    "flight_prices",
+    "average_fare_by_airline",
+    "booking_count_by_airline",
+    "seasonal_fare_variation",
+    "most_popular_routes",
+    "bd_flight_fare_row_audit",
+)
 
 
 @dag(
@@ -222,12 +235,102 @@ def flight_price_analysis_pipeline():
             cursor.close()
             mysql_conn.close()
 
+    @task
+    def run_dbt_seed() -> None:
+        subprocess.run(
+            [
+                "dbt",
+                "seed",
+                "--project-dir",
+                "/opt/airflow/dbt",
+                "--profiles-dir",
+                "/opt/airflow/dbt",
+                "--full-refresh",
+            ],
+            check=True
+        )
+
+    @task
+    def run_dbt_models() -> None:
+        subprocess.run([
+            "dbt",
+            "run",
+            "--project-dir",
+            "/opt/airflow/dbt",
+            "--profiles-dir",
+            "/opt/airflow/dbt",
+        ], check=True
+        )
+
+    @task
+    def run_dbt_test() -> None:
+        subprocess.run([
+            "dbt",
+            "test",
+            "--project-dir",
+            "/opt/airflow/dbt",
+            "--profiles-dir",
+            "/opt/airflow/dbt",
+        ], check=True
+        )
+
+    @task
+    def publish_transformed_data_to_postgres() -> None:
+        hook = PostgresHook(postgres_conn_id=POSTGRES_CONN_ID)
+        conn = hook.get_conn()
+        conn.autocommit = False
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(f"CREATE SCHEMA IF NOT EXISTS {REPORTING_SCHEMA};")
+
+                for table_name in PUBLISHED_TABLES:
+                    staging_table = f"__{table_name}_load"
+                    cursor.execute(f"DROP TABLE IF EXISTS {REPORTING_SCHEMA}.{staging_table};")
+                    cursor.execute(
+                        f"""
+                        CREATE TABLE {REPORTING_SCHEMA}.{staging_table} AS
+                        SELECT *
+                        FROM {ANALYTICS_SCHEMA}.{table_name};
+                        """
+                    )
+
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM {REPORTING_SCHEMA}.__flight_prices_load;"
+                )
+                published_row_count = cursor.fetchone()[0]
+                if published_row_count == 0:
+                    raise ValueError("Refusing to publish zero transformed flight price rows.")
+
+                for table_name in PUBLISHED_TABLES:
+                    staging_table = f"__{table_name}_load"
+                    cursor.execute(f"DROP TABLE IF EXISTS {REPORTING_SCHEMA}.{table_name};")
+                    cursor.execute(
+                        f"""
+                        ALTER TABLE {REPORTING_SCHEMA}.{staging_table}
+                        RENAME TO {table_name};
+                        """
+                    )
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     csv_count = validate_csv_file()
     create_raw = create_mysql_raw_table()
     load_raw = load_csv_to_mysql()
     validate_raw = validate_mysql_load(csv_count)
     load_postgres = load_data_to_postgres_from_mysql()
+    dbt_seed = run_dbt_seed()
+    dbt_models = run_dbt_models()
+    dbt_tests = run_dbt_test()
+    publish_postgres = publish_transformed_data_to_postgres()
 
     csv_count >> create_raw >> load_raw >> validate_raw >> load_postgres
+    load_postgres >> dbt_seed >> dbt_models >> dbt_tests >> publish_postgres
+
 
 flight_price_analysis_pipeline()

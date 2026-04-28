@@ -1,0 +1,12 @@
+flight_price_analysis:
+    target: dev
+    outputs:
+      dev:
+        type: postgres
+        host: postgres
+        user: airflow
+        password: "12345"
+        port: 5432
+        dbname: analysis
+        schema: analytics
+        threads: 4
