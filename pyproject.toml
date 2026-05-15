@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Airflow runtime dependencies for the flight price ELT pipeline."
 requires-python = ">=3.12,<3.14"
 dependencies = [
+    "apache-airflow-providers-docker==4.0.0",
     "apache-airflow-providers-mysql==6.5.2",
     "apache-airflow-providers-postgres==6.4.0",
     "dbt-postgres==1.10.0",

@@ -5,8 +5,8 @@ flight_price_analysis:
         type: postgres
         host: postgres
         user: airflow
-        password: "12345"
+        password: "airflow"
         port: 5432
-        dbname: analysis
+        dbname: airflow
         schema: analytics
         threads: 4

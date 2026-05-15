@@ -31,7 +31,13 @@ x-airflow-common:
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
     - ${AIRFLOW_PROJ_DIR:-.}/dbt:/opt/airflow/dbt
+    - /var/run/docker.sock:/var/run/docker.sock
   user: "${AIRFLOW_UID:-50000}:0"
+  group_add:
+    - "969"
+  networks:
+    - default
+    - amalitech-net
   depends_on:
     &airflow-common-depends-on
     redis:
@@ -300,3 +306,7 @@ services:
 volumes:
   mysql_data:
   postgres_data:
+
+networks:
+  amalitech-net:
+    external: true
